@@ -29,6 +29,7 @@ from ..common.consts import (
     API_HOST_TMPL,
     API_VERSION,
     CFG_BOOLS,
+    CHARGE_LIMIT_OPTIONS,
     DEFAULT_REGION,
     DEFAULT_SIGN_KEY,
     LOCATION_UNSUPPORTED_CODES,
@@ -54,7 +55,10 @@ from ..models.vehicle_images import image_urls_from_row
 _LOGGER = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
-_QUERY_SKIP_PATHS = frozenset({"/user/login", "/user/vehicle/remoteControl"})
+_TARGET_SOC_PATH = "/user/device/manage/targetSoc"
+_QUERY_SKIP_PATHS = frozenset(
+    {"/user/login", "/user/vehicle/remoteControl", _TARGET_SOC_PATH}
+)
 _ACCOUNT_QUERY_KEYS = frozenset({"GET /pub/timestamp", "GET /user/vehicle"})
 
 
@@ -381,6 +385,74 @@ class ApiClient:
             raise
         self._record_query(
             method="POST",
+            path=path,
+            started_at=started,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            http_status=http_status,
+            body=parsed,
+            error=error,
+            log_vehicle_id=log_vehicle_id,
+        )
+        return parsed if isinstance(parsed, dict) else {}
+
+    async def _put(
+        self,
+        path: str,
+        body: dict[str, Any],
+        *,
+        token: str | None = None,
+        timeout: aiohttp.ClientTimeout | None = None,
+        log_vehicle_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Signed JSON PUT once; no auth retry.
+
+        Signature covers ``{**body, timestamp}``; the JSON body carries the
+        fields only (the app signs a copy that has ``timestamp`` added).
+        """
+        ts = self.now_ms()
+        headers = {
+            "timestamp": ts,
+            "signature": self.sign({**body, "timestamp": ts}),
+            "user-agent": USER_AGENT,
+            "content-type": "application/json",
+            "language": "en",
+            "version": API_VERSION,
+        }
+        if token:
+            headers["token"] = token
+
+        started = datetime.now(timezone.utc).isoformat()
+        http_status: int | None = None
+        parsed: dict[str, Any] | None = None
+        error: str | None = None
+        try:
+            async with self.session.put(
+                self.api_base + path,
+                data=json.dumps(body, separators=(",", ":"), ensure_ascii=False),
+                headers=headers,
+                timeout=timeout or _HTTP_TIMEOUT,
+            ) as r:
+                http_status = getattr(r, "status", None)
+                raw = await r.json()
+            if isinstance(raw, dict):
+                parsed = raw
+            else:
+                error = "non_object_json"
+        except Exception as err:
+            error = type(err).__name__
+            self._record_query(
+                method="PUT",
+                path=path,
+                started_at=started,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+                http_status=http_status,
+                body=None,
+                error=error,
+                log_vehicle_id=log_vehicle_id,
+            )
+            raise
+        self._record_query(
+            method="PUT",
             path=path,
             started_at=started,
             finished_at=datetime.now(timezone.utc).isoformat(),
@@ -787,6 +859,88 @@ class ApiClient:
             ),
             path="/user/vehicle/state",
         )
+
+    async def get_charge_settings(self, vehicle_id: str) -> dict[str, Any] | None:
+        """GET /user/device/manage/terminalNoticeConfig/{vehicleId}.
+
+        Saved per-vehicle settings (``targetSoc`` charge limit, charge schedule,
+        alert toggles). None on soft failure; AuthError when the token stays stale.
+        """
+        self.reload_ids_from_store()
+
+        vid = str(vehicle_id or "").strip()
+        if not vid:
+            return None
+
+        path = f"/user/device/manage/terminalNoticeConfig/{vid}"
+        _LOGGER.debug("GET /user/device/manage/terminalNoticeConfig")
+
+        d = await self._request_authed(
+            lambda tok: self._get(
+                path,
+                sign_params={"vehicleId": vid},
+                token=tok,
+                log_vehicle_id=vid,
+            ),
+            path="/user/device/manage/terminalNoticeConfig",
+            raise_if_still_stale=True,
+        )
+
+        if str(d.get("code")) != OK_CODE:
+            _LOGGER.debug(
+                f"terminalNoticeConfig failed vehicle={partial_id(vid)} "
+                f"code={d.get('code')} msg={d.get('msg')}"
+            )
+            return None
+
+        data = d.get("data")
+
+        return dict(data) if isinstance(data, dict) else None
+
+    async def set_charge_limit(self, vehicle_id: str, target_soc: int) -> dict:
+        """PUT /user/device/manage/targetSoc — save the charge limit (percent).
+
+        Body ``{targetSoc, vehicleId}`` as the app's ``ChangeSocParams``. Only the
+        app's own slider anchors are sent; anything else is refused locally.
+        """
+        self.reload_ids_from_store()
+
+        vid = str(vehicle_id or "").strip()
+        if not vid:
+            _LOGGER.warning("targetSoc skipped vehicle_id missing")
+            return {"code": "-1", "msg": "vehicle_id missing"}
+
+        if isinstance(target_soc, bool) or target_soc not in CHARGE_LIMIT_OPTIONS:
+            _LOGGER.warning(
+                f"targetSoc skipped vehicle={partial_id(vid)} "
+                f"unsupported value={target_soc!r}"
+            )
+            allowed = ", ".join(str(v) for v in CHARGE_LIMIT_OPTIONS)
+            return {"code": "-1", "msg": f"charge limit must be one of {allowed}"}
+
+        body = {"targetSoc": int(target_soc), "vehicleId": vid}
+
+        _LOGGER.debug(f"PUT {_TARGET_SOC_PATH}")
+
+        d = await self._request_authed(
+            lambda tok: self._put(_TARGET_SOC_PATH, body, token=tok),
+            path=_TARGET_SOC_PATH,
+        )
+
+        code = str(d.get("code") or "")
+
+        _LOGGER.info(
+            f"targetSoc value={int(target_soc)} vehicle={partial_id(vid)} "
+            f"code={d.get('code')}"
+        )
+
+        if code not in (OK_CODE, "0"):
+            _LOGGER.warning(
+                f"targetSoc failed value={int(target_soc)} vehicle={partial_id(vid)} "
+                f"code={d.get('code')} msg={d.get('msg')}"
+            )
+
+        return d
 
     async def get_ws_connect(self, device_sn: str) -> str | None:
         """GET /netty/getConnect/2/{deviceSn} — WS base URL, or None on failure."""

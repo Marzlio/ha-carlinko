@@ -37,6 +37,10 @@ MAINTAIN_POLL_INTERVAL_S = 43200
 FIRMWARE_POLL_INTERVAL_S = 86400
 # REST /user/vehicle/state when WS is disconnected (WS remains primary).
 REST_STATE_POLL_INTERVAL_S = 60
+# Saved charge settings (charge limit); also read at startup and after each set.
+CHARGE_SETTINGS_POLL_INTERVAL_S = 900
+# The only charge limits the CarLinko app sends: its slider snaps to these anchors.
+CHARGE_LIMIT_OPTIONS = (80, 90, 100)
 # Cloud: vehicle control / locate function unavailable.
 LOCATION_UNSUPPORTED_CODES = frozenset({"50049"})
 # Notice page types that are operational (not CMS/marketing).
@@ -85,7 +89,8 @@ DEFAULT_REGION = "sea"
 API_HOST_TMPL = "https://cqr-api-{region}.hzhjcl.com"
 WS_HOST_TMPL = "ws://wss-cqr-{region}.hzhjcl.com:4002/"
 # Matches LOGIN_BODY_DEFAULTS appVersion; sent as signed-request ``version`` header.
-API_VERSION = "1.12.0"
+# Tracks the CarLinko Android release on Google Play (1.14.10, 2026-11-03).
+API_VERSION = "1.14.10"
 OK_CODE = "0000"
 STALE_TOKEN_CODES = frozenset({"9997", "40001", "40003", "401", "1001", "1002"})
 # Meta keys preserved across /user/vehicle fleet sync.
@@ -112,6 +117,8 @@ REST_META_KEYS = (
     "firmware_available",
     "firmware_offered_version",
     "firmware_upgrading",
+    "charge_settings_last_poll",
+    "charge_limit",
 )
 # Union used by store.set_vehicles when merging prior meta.
 PRESERVED_VEHICLE_META_KEYS = LOCATION_META_KEYS + REST_META_KEYS
@@ -342,10 +349,16 @@ KPA_TO_PSI = 0.145038
 TYRE_TEMP_SCALE = 0.65
 TYRE_TEMP_OFFSET = -40
 TYRE_INVALID = 0xFF
+# Direct-TPMS "check tyres" band in psi. Fallback only: the right band depends on the
+# car's door-placard pressure, so set tyre_psi_min / tyre_psi_max per model below.
+DEFAULT_TYRE_PSI_MIN = 28.0
+DEFAULT_TYRE_PSI_MAX = 40.0
 
 # Per-model overrides CarLinko never sends (e.g. pack kWh). Keys are identifying words;
 # VehicleState matches model strings word-wise (most specific key wins). Owner-confirmed
 # values — add yours: https://github.com/elad-bar/ha-carlinko/issues/new?template=compatibility.md
+# Optional keys: battery_kwh, tpms_scale, powertrain, chemistry, wltp_kwh_100,
+# tyre_psi_min, tyre_psi_max.
 KNOWN_CAR_OVERRIDES = {
     "jaecoo j5 ev": {
         "battery_kwh": 58.9,
@@ -374,6 +387,15 @@ KNOWN_CAR_OVERRIDES = {
         "wltp_kwh_100": 15.5,
         "chemistry": "lfp",
     },  # issue #5 (UY)
+    # Chery Q (ZA; the cloud reports model "Chery Q"). Pack size is the published South
+    # African spec, not an owner measurement. Direct TPMS: the default 1.373 scale gives
+    # plausible pressures (about 2.8 bar parked) but is not yet checked against the
+    # dash. No tyre band yet — add tyre_psi_min / tyre_psi_max from the door placard.
+    # Battery-only car: "bev" stops stray fuel bytes from creating the PHEV sensors.
+    "chery q": {
+        "battery_kwh": 42.7,
+        "powertrain": "bev",
+    },
 }
 
 # Empty live-state skeleton for VehicleState (deepcopy before use — nested mutables).

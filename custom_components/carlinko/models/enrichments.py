@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
-from ..common.consts import BLOB, BLOB_ENRICHMENTS, KPA_TO_PSI, TPMS_POS, TYRE_INVALID
+from ..common.consts import (
+    BLOB,
+    BLOB_ENRICHMENTS,
+    DEFAULT_TPMS_SCALE,
+    DEFAULT_TYRE_PSI_MAX,
+    DEFAULT_TYRE_PSI_MIN,
+    KPA_TO_PSI,
+    TPMS_POS,
+    TYRE_INVALID,
+)
 from ..common.helpers import pressure, temp
 
 
@@ -72,8 +81,12 @@ class Enrichments:
         tb = self.blob[ty_s:ty_e]
         if not any(x != TYRE_INVALID for x in tb):
             return
-        scale = self.ctx.get("tpms_scale")
+        scale = self.ctx.get("tpms_scale") or DEFAULT_TPMS_SCALE
         unit = self.ctx.get("tyre_unit") or "psi"
+        psi_min = self.ctx.get("tyre_psi_min")
+        psi_max = self.ctx.get("tyre_psi_max")
+        psi_min = DEFAULT_TYRE_PSI_MIN if psi_min is None else psi_min
+        psi_max = DEFAULT_TYRE_PSI_MAX if psi_max is None else psi_max
         self.new_data["tpms"] = [
             {
                 "pos": TPMS_POS[i],
@@ -91,7 +104,9 @@ class Enrichments:
         if raw_psi:
             self.new_data["tyre_indirect"] = False
             self.new_data["tyre_status"] = (
-                "check_tyres" if any(p < 28 or p > 40 for p in raw_psi) else "normal"
+                "check_tyres"
+                if any(p < psi_min or p > psi_max for p in raw_psi)
+                else "normal"
             )
 
     def enrich_moving(self):

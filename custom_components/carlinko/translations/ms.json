@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "Ekonomi petrol"
+      },
+      "charge_limit": {
+        "name": "Had pengecasan"
       }
     },
     "lock": {

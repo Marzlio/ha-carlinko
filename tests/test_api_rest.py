@@ -103,7 +103,7 @@ async def test_send_control_uses_per_vehicle_sn_only() -> None:
     assert payload["deviceSn"] == "sn-2"
     assert "timestamp" in payload
     headers = client.session.post.call_args.kwargs["headers"]
-    assert headers["version"] == "1.12.0"
+    assert headers["version"] == "1.14.10"
     expected = client.sign({**payload})
     assert headers["signature"] == expected
 
@@ -117,7 +117,7 @@ async def test_is_online_signs_id_not_query() -> None:
     assert args[0].endswith("/user/vehicle/isOnline/veh-99")
     assert "params" not in kwargs
     headers = kwargs["headers"]
-    assert headers["version"] == "1.12.0"
+    assert headers["version"] == "1.14.10"
     assert headers["signature"] == client.sign(
         {"id": "veh-99", "timestamp": headers["timestamp"]}
     )
@@ -136,7 +136,7 @@ async def test_login_body_includes_timestamp_and_version() -> None:
     headers = client.session.post.call_args.kwargs["headers"]
     assert body["timestamp"] == headers["timestamp"]
     assert body["dateTime"] == body["timestamp"]
-    assert headers["version"] == "1.12.0"
+    assert headers["version"] == "1.14.10"
     assert "token" not in headers
     assert headers["signature"] == client.sign({**body})
     log = client.query_log_for_diagnostics()

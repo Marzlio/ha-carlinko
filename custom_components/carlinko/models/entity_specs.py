@@ -24,7 +24,7 @@ class EntitySpec:
     state_class: str | None = None
     icon: str | None = None
     options: tuple[str, ...] | None = None
-    when: str | None = None  # None | phev | direct_tpms | cap:...
+    when: str | None = None  # None | phev | direct_tpms | charge_limit | cap:...
     config_key: str | None = None  # tariff | petrol_price | petrol_kml
     commands: Mapping[str, str] = field(
         default_factory=dict
@@ -659,6 +659,18 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
         when="cap:charging",
         commands={"press": "742701"},
     ),
+    # Saved cloud setting (PUT /user/device/manage/targetSoc), not a remoteControl
+    # opcode. Created once the cloud returns a charge limit for the vehicle.
+    EntitySpec(
+        key="charge_limit",
+        platform="number",
+        name="Charge limit",
+        data_path="charge_settings.target_soc",
+        unit="%",
+        icon="mdi:battery-charging-high",
+        when="charge_limit",
+        cloud_rest=True,
+    ),
     EntitySpec(
         key="engine",
         platform="switch",
@@ -830,6 +842,11 @@ def _when_direct_tpms(state: dict, _caps: dict) -> bool:
     return state.get("tyre_indirect") is False
 
 
+def _when_charge_limit(state: dict, _caps: dict) -> bool:
+    settings = state.get("charge_settings")
+    return isinstance(settings, dict) and settings.get("target_soc") is not None
+
+
 def _cap_windows(caps: dict) -> bool:
     w = caps.get("windows") or {}
     return bool(w.get("open") or w.get("close") or w.get("vent"))
@@ -863,6 +880,7 @@ def _cap_default(caps: dict, path: str) -> bool:
 _WHEN: dict[str, Callable[[dict, dict], bool]] = {
     "phev": _when_phev,
     "direct_tpms": _when_direct_tpms,
+    "charge_limit": _when_charge_limit,
 }
 
 # Exact cap: paths with non-default truthiness. seats.* uses startswith below.

@@ -28,6 +28,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from ..common.consts import (
     AVAILABILITY_SECONDS,
     CAPS_REFRESH_INTERVAL_S,
+    CHARGE_LIMIT_OPTIONS,
+    CHARGE_SETTINGS_POLL_INTERVAL_S,
     CONF_AVAILABILITY_SECONDS,
     CONF_EMAIL,
     CONF_PASSWORD,
@@ -124,6 +126,7 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._maintain_task: asyncio.Task | None = None
         self._firmware_task: asyncio.Task | None = None
         self._rest_state_task: asyncio.Task | None = None
+        self._charge_settings_task: asyncio.Task | None = None
         self._vehicles: dict[str, VehicleRuntime] = {}
         self._entity_listeners: list[EntityListener] = []
         self._was_available: dict[str, bool] = {}
@@ -276,10 +279,11 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "offered_version": None,
                 "upgrading": False,
             },
+            "charge_settings": {"target_soc": None},
         }
 
     def _seed_rest_slices_from_meta(self, vehicle_id: str) -> None:
-        """Hydrate notice/maintain/firmware VehicleState from persisted meta."""
+        """Hydrate notice/maintain/firmware/charge VehicleState from persisted meta."""
         rt = self._vehicles.get(str(vehicle_id))
         if rt is None:
             return
@@ -311,6 +315,10 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             firmware["offered_version"] = meta.get("firmware_offered_version")
         if "firmware_upgrading" in meta:
             firmware["upgrading"] = bool(meta.get("firmware_upgrading"))
+        if "charge_limit" in meta:
+            data["charge_settings"]["target_soc"] = _as_percent(
+                meta.get("charge_limit")
+            )
 
     async def _probe_location(self, vehicle_id: str, *, force: bool = False) -> None:
         """One locate call; update capability + coords. Never raises for setup."""
@@ -456,6 +464,14 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 translation_domain=DOMAIN,
                 translation_key="auth_failed",
             ) from err
+        try:
+            await self._probe_all_charge_settings()
+        except AuthError as err:
+            await self._async_handle_auth_failure(err, source="charge_settings_probe")
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN,
+                translation_key="auth_failed",
+            ) from err
         self._publish_data()
         for vid, rt in self._vehicles.items():
             rt.spec_keys = self.current_spec_keys(vid)
@@ -476,6 +492,13 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._rest_state_task = self.hass.async_create_background_task(
             self._rest_state_poll_loop(), name=f"{DOMAIN}_rest_state"
+        )
+        self._charge_settings_task = self.hass.async_create_background_task(
+            self._charge_settings_poll_loop(), name=f"{DOMAIN}_charge_settings"
+        )
+        _LOGGER.debug(
+            f"_charge_settings_poll_loop task started "
+            f"interval={CHARGE_SETTINGS_POLL_INTERVAL_S}s"
         )
         _LOGGER.debug(
             f"_caps_refresh_loop task started interval={CAPS_REFRESH_INTERVAL_S}s"
@@ -677,6 +700,7 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             await self._probe_location(vehicle_id)
             await self._probe_firmware(vehicle_id)
+            await self._probe_charge_settings(vehicle_id)
             self._publish_data()
             self._maybe_notify_spec_changes(vehicle_id)
         except AuthError as err:
@@ -1058,6 +1082,61 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return
             self._publish_data()
 
+    async def _probe_charge_settings(self, vehicle_id: str) -> dict[str, Any]:
+        """Read saved charge settings; keep the prior snapshot on a soft failure."""
+        vid = str(vehicle_id)
+        rt = self._vehicles.get(vid)
+        config = await self.api.get_charge_settings(vid)
+        if config is None:
+            if rt is None:
+                return {"target_soc": None}
+            return dict(
+                rt.vehicle_state.data.get("charge_settings") or {"target_soc": None}
+            )
+        snapshot = {"target_soc": _as_percent(config.get("targetSoc"))}
+        if rt is not None:
+            rt.vehicle_state.data["charge_settings"] = dict(snapshot)
+        self.store.update_vehicle_meta(
+            vid,
+            charge_settings_last_poll=time.time(),
+            charge_limit=snapshot["target_soc"],
+        )
+        if rt is not None:
+            rt.meta = self.store.get_vehicle_meta(vid)
+        return snapshot
+
+    async def _probe_all_charge_settings(self) -> None:
+        for vid in list(self._vehicles):
+            try:
+                await self._probe_charge_settings(vid)
+            except AuthError:
+                raise
+            except Exception:
+                _LOGGER.exception(
+                    f"charge settings probe skipped vehicle={partial_id(vid)}"
+                )
+
+    async def _charge_settings_poll_loop(self) -> None:
+        # Startup already probed once; wait a full interval before the next.
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=CHARGE_SETTINGS_POLL_INTERVAL_S
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._probe_all_charge_settings()
+            except AuthError as err:
+                await self._async_handle_auth_failure(
+                    err, source="charge_settings_poll"
+                )
+                return
+            self._publish_data()
+            for vid in list(self._vehicles):
+                self._maybe_notify_spec_changes(vid)
+
     async def _poll_rest_state_vehicle(self, vehicle_id: str) -> None:
         """Fetch /user/vehicle/state when WS is down; same blob path as action:6."""
         vid = str(vehicle_id)
@@ -1263,6 +1342,88 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("async_send_control result ok")
         return result
 
+    async def async_set_charge_limit(self, vehicle_id: str, value: float) -> int | None:
+        """Save the charge limit, then read it back; returns the stored percent."""
+        vid = self._require_vehicle(vehicle_id)
+        try:
+            target = int(value)
+        except (TypeError, ValueError, OverflowError):
+            target = None
+        if target is None or target != value or target not in CHARGE_LIMIT_OPTIONS:
+            allowed = ", ".join(str(v) for v in CHARGE_LIMIT_OPTIONS)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_failed",
+                translation_placeholders={
+                    "error": f"charge limit must be one of {allowed}"
+                },
+            )
+        _LOGGER.debug(
+            f"async_set_charge_limit value={target} vehicle={partial_id(vid)}"
+        )
+        try:
+            result = await self.api.set_charge_limit(vid, target)
+        except Exception as err:
+            if _is_auth_error(err):
+                await self._async_handle_auth_failure(err, source="charge_limit")
+                raise ConfigEntryAuthFailed(
+                    translation_domain=DOMAIN,
+                    translation_key="auth_failed",
+                ) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        code = str(result.get("code") or "")
+        if code in STALE_TOKEN_CODES:
+            _LOGGER.warning(
+                f"charge limit stale token vehicle={partial_id(vid)} code={code}"
+            )
+            await self._async_handle_auth_failure(
+                AuthError(f"token stale (code={code})"), source="charge_limit"
+            )
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN,
+                translation_key="auth_failed",
+            )
+        if code not in (OK_CODE, "0"):
+            _LOGGER.warning(
+                f"charge limit failed vehicle={partial_id(vid)} value={target} "
+                f"code={code} msg={result.get('msg')}"
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_failed",
+                translation_placeholders={
+                    "error": f"code={code or 'none'} msg={result.get('msg')}"
+                },
+            )
+        # Cloud accepted it: show the new value now, then confirm with a read-back.
+        rt = self._vehicles.get(vid)
+        if rt is not None:
+            rt.vehicle_state.data["charge_settings"] = {"target_soc": target}
+        self.store.update_vehicle_meta(vid, charge_limit=target)
+        if rt is not None:
+            rt.meta = self.store.get_vehicle_meta(vid)
+        stored: int | None = target
+        try:
+            stored = (await self._probe_charge_settings(vid)).get("target_soc")
+        except AuthError as err:
+            await self._async_handle_auth_failure(err, source="charge_limit")
+        except Exception:
+            _LOGGER.exception(
+                f"charge limit read-back failed vehicle={partial_id(vid)}"
+            )
+        if stored != target:
+            _LOGGER.warning(
+                f"charge limit read-back mismatch vehicle={partial_id(vid)} "
+                f"sent={target} stored={stored}"
+            )
+        self._publish_data()
+        self._maybe_notify_spec_changes(vid)
+        return stored
+
     async def async_stop(self) -> None:
         ws_count = sum(1 for rt in self._vehicles.values() if rt.ws_task)
         caps = 1 if self._caps_task else 0
@@ -1271,12 +1432,14 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         maintain = 1 if self._maintain_task else 0
         firmware = 1 if self._firmware_task else 0
         rest_state = 1 if self._rest_state_task else 0
+        charge_settings = 1 if self._charge_settings_task else 0
         _LOGGER.info(f"coordinator stopping vehicles={len(self._vehicles)}")
         _LOGGER.debug(
             f"async_stop cancel ws tasks count={ws_count} "
             f"caps_task={caps} location_task={loc} notice_task={notice} "
             f"maintain_task={maintain} firmware_task={firmware} "
-            f"rest_state_task={rest_state}"
+            f"rest_state_task={rest_state} "
+            f"charge_settings_task={charge_settings}"
         )
         self._stop.set()
         tasks: list[asyncio.Task] = []
@@ -1294,6 +1457,7 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "_maintain_task",
             "_firmware_task",
             "_rest_state_task",
+            "_charge_settings_task",
         ):
             task = getattr(self, attr)
             if task:
@@ -1327,6 +1491,19 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         return dict(self.data or {"vehicles": {}})
+
+
+def _as_percent(value: Any) -> int | None:
+    """Whole percent 0-100 from a cloud number or numeric string; else None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or not 0 <= number <= 100:
+        return None
+    return int(round(number))
 
 
 def _is_auth_error(err: Exception) -> bool:

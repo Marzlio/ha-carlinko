@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "Tiết kiệm nhiên liệu"
+      },
+      "charge_limit": {
+        "name": "Giới hạn sạc"
       }
     },
     "lock": {

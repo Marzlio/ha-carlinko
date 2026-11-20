@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "مصرف بنزین"
+      },
+      "charge_limit": {
+        "name": "حد شارژ"
       }
     },
     "lock": {

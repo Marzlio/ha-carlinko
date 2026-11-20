@@ -127,6 +127,12 @@ async def test_async_start_multi_vehicle(hass: HomeAssistant) -> None:
         ),
         patch.object(
             coordinator.api,
+            "get_charge_settings",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            coordinator.api,
             "get_notice_unread_count",
             new_callable=AsyncMock,
             return_value={},
@@ -187,6 +193,12 @@ async def test_vehicle_list_add_remove(hass: HomeAssistant) -> None:
         patch.object(
             coordinator.api,
             "get_higher_firmware",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch.object(
+            coordinator.api,
+            "get_charge_settings",
             new_callable=AsyncMock,
             return_value=None,
         ),
@@ -466,3 +478,215 @@ async def test_rest_state_poll_applies_blob_when_disconnected(
         update_data.assert_called_once_with(blob)
         handle_frame.assert_called_once()
         assert handle_frame.call_args.args[0] == "veh-1"
+
+
+# --- Charge limit (saved cloud setting) --------------------------------------
+
+
+def _charge_coordinator(
+    hass: HomeAssistant,
+) -> tuple[CarlinkoCoordinator, MockConfigEntry]:
+    entry = _entry()
+    entry.add_to_hass(hass)
+    store = _store(hass, entry)
+    store.data = {
+        "token": "tok",
+        "vehicles": {
+            "v1": {
+                "vehicle_id": "v1",
+                "device_sn": "s1",
+                "plate": "P",
+                "model": "Chery Q",
+            }
+        },
+    }
+    coordinator = CarlinkoCoordinator(hass, entry, store, MagicMock())
+    coordinator.api.token = "tok"
+    coordinator._vehicles["v1"] = VehicleRuntime(
+        vehicle_id="v1",
+        device_sn="s1",
+        meta=store.get_vehicle_meta("v1"),
+        vehicle_state=VehicleState(),
+    )
+    coordinator._seed_rest_slices_from_meta("v1")
+    return coordinator, entry
+
+
+@pytest.mark.asyncio
+async def test_probe_charge_settings_updates_state_and_meta(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    assert coordinator._vehicles["v1"].vehicle_state.data["charge_settings"] == {
+        "target_soc": None
+    }
+
+    with patch.object(
+        coordinator.api,
+        "get_charge_settings",
+        new_callable=AsyncMock,
+        return_value={"targetSoc": 100},
+    ):
+        snapshot = await coordinator._probe_charge_settings("v1")
+
+    assert snapshot == {"target_soc": 100}
+    state = coordinator._vehicles["v1"].vehicle_state.data
+    assert state["charge_settings"]["target_soc"] == 100
+    assert coordinator.store.get_vehicle_meta("v1")["charge_limit"] == 100
+    assert "charge_limit" in coordinator.current_spec_keys("v1")
+
+
+@pytest.mark.asyncio
+async def test_probe_charge_settings_keeps_last_value_on_soft_failure(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    coordinator._vehicles["v1"].vehicle_state.data["charge_settings"] = {
+        "target_soc": 90
+    }
+    with patch.object(
+        coordinator.api,
+        "get_charge_settings",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        snapshot = await coordinator._probe_charge_settings("v1")
+
+    assert snapshot == {"target_soc": 90}
+    state = coordinator._vehicles["v1"].vehicle_state.data
+    assert state["charge_settings"]["target_soc"] == 90
+
+
+@pytest.mark.asyncio
+async def test_charge_limit_seeded_from_stored_meta(hass: HomeAssistant) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    coordinator.store.update_vehicle_meta("v1", charge_limit=80)
+    coordinator._seed_rest_slices_from_meta("v1")
+    state = coordinator._vehicles["v1"].vehicle_state.data
+    assert state["charge_settings"]["target_soc"] == 80
+
+
+@pytest.mark.asyncio
+async def test_async_set_charge_limit_writes_then_reads_back(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    with (
+        patch.object(
+            coordinator.api,
+            "set_charge_limit",
+            new_callable=AsyncMock,
+            return_value={"code": "0000"},
+        ) as set_limit,
+        patch.object(
+            coordinator.api,
+            "get_charge_settings",
+            new_callable=AsyncMock,
+            return_value={"targetSoc": 90},
+        ) as get_settings,
+    ):
+        stored = await coordinator.async_set_charge_limit("v1", 90.0)
+
+    assert stored == 90
+    set_limit.assert_awaited_once_with("v1", 90)
+    get_settings.assert_awaited_once_with("v1")
+    assert coordinator.vehicle_data("v1")["charge_settings"]["target_soc"] == 90
+    assert coordinator.store.get_vehicle_meta("v1")["charge_limit"] == 90
+
+
+@pytest.mark.asyncio
+async def test_async_set_charge_limit_shows_what_the_cloud_stored(
+    hass: HomeAssistant,
+) -> None:
+    """If the read-back differs from what was sent, the read-back wins."""
+    coordinator, _ = _charge_coordinator(hass)
+    with (
+        patch.object(
+            coordinator.api,
+            "set_charge_limit",
+            new_callable=AsyncMock,
+            return_value={"code": "0000"},
+        ),
+        patch.object(
+            coordinator.api,
+            "get_charge_settings",
+            new_callable=AsyncMock,
+            return_value={"targetSoc": 100},
+        ),
+    ):
+        stored = await coordinator.async_set_charge_limit("v1", 80)
+
+    assert stored == 100
+    assert coordinator.vehicle_data("v1")["charge_settings"]["target_soc"] == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [85, 50, 100.5, 0, 110])
+async def test_async_set_charge_limit_rejects_non_anchor_values(
+    hass: HomeAssistant, value: float
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    with patch.object(
+        coordinator.api, "set_charge_limit", new_callable=AsyncMock
+    ) as set_limit:
+        with pytest.raises(HomeAssistantError):
+            await coordinator.async_set_charge_limit("v1", value)
+        set_limit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_set_charge_limit_cloud_error_keeps_old_value(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    coordinator._vehicles["v1"].vehicle_state.data["charge_settings"] = {
+        "target_soc": 100
+    }
+    with (
+        patch.object(
+            coordinator.api,
+            "set_charge_limit",
+            new_callable=AsyncMock,
+            return_value={"code": "5000", "msg": "refused"},
+        ),
+        patch.object(
+            coordinator.api, "get_charge_settings", new_callable=AsyncMock
+        ) as get_settings,
+    ):
+        with pytest.raises(HomeAssistantError) as err:
+            await coordinator.async_set_charge_limit("v1", 80)
+        get_settings.assert_not_called()
+
+    assert not isinstance(err.value, ConfigEntryAuthFailed)
+    state = coordinator._vehicles["v1"].vehicle_state.data
+    assert state["charge_settings"]["target_soc"] == 100
+
+
+@pytest.mark.asyncio
+async def test_async_set_charge_limit_stale_token_starts_reauth(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, entry = _charge_coordinator(hass)
+    with (
+        patch.object(
+            coordinator.api,
+            "set_charge_limit",
+            new_callable=AsyncMock,
+            return_value={"code": "9997"},
+        ),
+        patch.object(entry, "async_start_reauth") as start_reauth,
+    ):
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coordinator.async_set_charge_limit("v1", 80)
+        start_reauth.assert_called_once_with(hass)
+
+
+@pytest.mark.asyncio
+async def test_async_set_charge_limit_unknown_vehicle(hass: HomeAssistant) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    with patch.object(
+        coordinator.api, "set_charge_limit", new_callable=AsyncMock
+    ) as set_limit:
+        with pytest.raises(HomeAssistantError):
+            await coordinator.async_set_charge_limit("other", 80)
+        set_limit.assert_not_called()

@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "اقتصاد البنزين"
+      },
+      "charge_limit": {
+        "name": "حد الشحن"
       }
     },
     "lock": {

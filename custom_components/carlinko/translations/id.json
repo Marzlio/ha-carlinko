@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "Efisiensi bensin"
+      },
+      "charge_limit": {
+        "name": "Batas pengisian"
       }
     },
     "lock": {

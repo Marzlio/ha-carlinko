@@ -88,6 +88,11 @@ async def test_async_setup_and_unload_entry(hass: HomeAssistant) -> None:
             return_value=None,
         ),
         patch(
+            "custom_components.carlinko.managers.api_client.ApiClient.get_charge_settings",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
             "custom_components.carlinko.managers.api_client.ApiClient.get_notice_unread_count",
             new_callable=AsyncMock,
             return_value={},

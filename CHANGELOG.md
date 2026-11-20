@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Charge limit** number entity (80, 90 or 100 %), read from the car's saved CarLinko settings and written with the same call the app uses. It appears once the cloud returns a limit for the car. The write is taken from the app and not yet confirmed on a real car
+- Chery Q profile: battery size (42.7 kWh, published specification) so **Energy left** uses the right pack size, and the car is fixed as battery-only so the PHEV fuel sensors are never created for it
+- Per-model tyre pressure band (`tyre_psi_min` / `tyre_psi_max`) for the direct-TPMS **Tyre status** check; the default stays 28–40 psi
+
+### Changed
+
+- App version sent to CarLinko is now `1.14.10` (was `1.12.0`), matching the current Android app
+- `SECURITY.md` and the README now say plainly that the live stream is normally unencrypted (`ws://`), which exposes the auth token and telemetry on the network path
+
 ## [0.1.12] - 2026-09-07
 
 ### Added

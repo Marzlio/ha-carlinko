@@ -28,8 +28,9 @@ POST JSON bodies usually also include a `timestamp` field used for signing.
 
 | Item             | Behavior                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------------- |
-| Body `timestamp` | Included on `login`, `remoteControl`, and `deviceLocate`                                 |
-| `version` header | Sent as app version (`1.12.0`) on signed requests + login                                |
+| Body `timestamp` | Included on `login`, `remoteControl`, and `deviceLocate` (not on `PUT targetSoc`)        |
+| `version` header | Sent as app version (`1.14.10`) on signed requests + login                               |
+| Charge limit     | `PUT targetSoc` body has no `timestamp`; only 80 / 90 / 100 are sent                     |
 | `isOnline` sign  | `{ "id": "<vehicleId>", "timestamp": "…" }` (path id; not a query param)                 |
 | Clock skew       | `GET /pub/timestamp` adjusts `now_ms()`                                                  |
 | WS URL           | `GET /netty/getConnect/2/{deviceSn}` before connect; region template fallback            |
@@ -554,20 +555,112 @@ Blob layout: see [api-map.md](api-map.md) (WS action 6). HA polls this only whil
 
 ---
 
+## 14. `GET /user/device/manage/terminalNoticeConfig/{vehicleId}`
+
+**Auth:** signed headers + token
+**Client:** read saved per-vehicle settings (charge limit; alert toggles are ignored)
+
+### Path
+
+`/user/device/manage/terminalNoticeConfig/{vehicleId}`
+
+### Sign payload (headers only; no body)
+
+```json
+{
+  "vehicleId": "<vehicleId>",
+  "timestamp": "<corrected utc ms>"
+}
+```
+
+### Response
+
+```json
+{
+  "code": "0000",
+  "msg": "...",
+  "data": {
+    "targetSoc": 100,
+    "lowVoltage": "…",
+    "illegalOpened": "…",
+    "forgetToLock": "…"
+  }
+}
+```
+
+Only `targetSoc` (charge limit, percent) is used. The object also carries the alert
+toggles and a `batterySchedule` entry; their value types are not modelled here. HA
+reads this at startup, every 15 minutes, and after each charge-limit write. Read
+confirmed on a Chery Q (`saf`).
+
+---
+
+## 15. `PUT /user/device/manage/targetSoc`
+
+**Auth:** signed headers + token, `content-type: application/json`
+**Client:** save the charge limit (`HttpRequestInterface.settingChargeSoc`, body bean
+`ChangeSocParams`)
+
+### Request body
+
+```json
+{
+  "targetSoc": 90,
+  "vehicleId": "<vehicleId>"
+}
+```
+
+Unlike `login` / `remoteControl` / `deviceLocate`, the body has **no** `timestamp`
+field.
+
+### Sign payload
+
+```json
+{
+  "targetSoc": 90,
+  "vehicleId": "<vehicleId>",
+  "timestamp": "<corrected utc ms>"
+}
+```
+
+### Response
+
+```json
+{
+  "code": "0000",
+  "msg": "...",
+  "data": null
+}
+```
+
+`0000` = saved; `9997` = token invalid → re-login. The `data` value on success is not
+known.
+
+The app's charge-limit slider snaps to three anchors — **80, 90, 100** — so those
+are the only values it ever sends. `ApiClient.set_charge_limit` refuses anything else
+before making a request, because the server's handling of other values is unknown.
+
+**Status:** contract taken from the app decompile (CarLinko 1.14.x). The write has
+**not** been exercised against a live car by this project.
+
+---
+
 ## Quick reference
 
-| Method | Path                                  | Body / query highlight                          | `data` shape                |
-| ------ | ------------------------------------- | ----------------------------------------------- | --------------------------- |
-| POST   | `/user/login`                         | `LoginParams` + `timestamp`                     | token string                |
-| GET    | `/user/vehicle`                       | —                                               | `VehicleData[]`             |
-| POST   | `/user/vehicle/remoteControl`         | `vehicleId`, `deviceSn`, `data`, `timeOut`      | usually null                |
-| POST   | `/maps/deviceLocate`                  | `sn`, `showAddress`                             | `{ address, lat, lng }`     |
-| GET    | `/user/vehicle/isOnline/{vehicleId}`  | path id; sign `id`                              | `boolean`                   |
-| GET    | `/user/notice/unReadCount`            | optional `vehicleId`                            | message-center VOs          |
-| GET    | `/user/notice/page`                   | `page`, `size=20`, `type`, optional `vehicleId` | notice list + `total`       |
-| GET    | `/user/maintain/page`                 | `vehicleId`, `queryKey`, `page`, `size=20`      | maintain list + `total`     |
-| GET    | `/user/maintain/details/{maintainId}` | path id                                         | maintain detail + `logList` |
-| GET    | `/user/higherFirmware`                | `deviceId`, `version`                           | `FirmwareInfoBean`          |
-| GET    | `/pub/timestamp`                      | —                                               | epoch ms                    |
-| GET    | `/netty/getConnect/2/{deviceSn}`      | path SN                                         | WS URL string               |
-| GET    | `/user/vehicle/state/{vehicleId}`     | path id; sign `id`                              | telemetry hex               |
+| Method | Path                                                   | Body / query highlight                          | `data` shape                     |
+| ------ | ------------------------------------------------------ | ----------------------------------------------- | -------------------------------- |
+| POST   | `/user/login`                                          | `LoginParams` + `timestamp`                     | token string                     |
+| GET    | `/user/vehicle`                                        | —                                               | `VehicleData[]`                  |
+| POST   | `/user/vehicle/remoteControl`                          | `vehicleId`, `deviceSn`, `data`, `timeOut`      | usually null                     |
+| POST   | `/maps/deviceLocate`                                   | `sn`, `showAddress`                             | `{ address, lat, lng }`          |
+| GET    | `/user/vehicle/isOnline/{vehicleId}`                   | path id; sign `id`                              | `boolean`                        |
+| GET    | `/user/notice/unReadCount`                             | optional `vehicleId`                            | message-center VOs               |
+| GET    | `/user/notice/page`                                    | `page`, `size=20`, `type`, optional `vehicleId` | notice list + `total`            |
+| GET    | `/user/maintain/page`                                  | `vehicleId`, `queryKey`, `page`, `size=20`      | maintain list + `total`          |
+| GET    | `/user/maintain/details/{maintainId}`                  | path id                                         | maintain detail + `logList`      |
+| GET    | `/user/higherFirmware`                                 | `deviceId`, `version`                           | `FirmwareInfoBean`               |
+| GET    | `/pub/timestamp`                                       | —                                               | epoch ms                         |
+| GET    | `/netty/getConnect/2/{deviceSn}`                       | path SN                                         | WS URL string                    |
+| GET    | `/user/vehicle/state/{vehicleId}`                      | path id; sign `id`                              | telemetry hex                    |
+| GET    | `/user/device/manage/terminalNoticeConfig/{vehicleId}` | path id; sign `vehicleId`                       | saved settings incl. `targetSoc` |
+| PUT    | `/user/device/manage/targetSoc`                        | `targetSoc` (80 / 90 / 100), `vehicleId`        | not known                        |

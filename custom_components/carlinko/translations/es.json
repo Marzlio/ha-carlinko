@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "Consumo de gasolina"
+      },
+      "charge_limit": {
+        "name": "Límite de carga"
       }
     },
     "lock": {

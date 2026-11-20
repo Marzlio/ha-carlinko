@@ -277,6 +277,9 @@
       },
       "petrol_kml": {
         "name": "יעילות בנזין"
+      },
+      "charge_limit": {
+        "name": "מגבלת טעינה"
       }
     },
     "lock": {

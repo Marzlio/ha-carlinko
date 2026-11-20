@@ -1,4 +1,4 @@
-"""CarLinko number entities (cost knobs)."""
+"""CarLinko number entities (cost knobs + charge limit)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .common.base_entity import CarlinkoEntity
+from .common.consts import CHARGE_LIMIT_OPTIONS
 from .common.entity_setup import async_setup_entities
 from .common.helpers import partial_id
 from .managers.coordinator import CarlinkoCoordinator
@@ -19,10 +20,18 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 1
 
+_CHARGE_LIMIT_KEY = "charge_limit"
+
 _LIMITS = {
     "tariff": (0, 1e7, 0.01),
     "petrol_price": (0, 1e7, 0.01),
     "petrol_kml": (0, 100, 0.1),
+    # Same anchors as the CarLinko app's charge-limit slider.
+    _CHARGE_LIMIT_KEY: (
+        min(CHARGE_LIMIT_OPTIONS),
+        max(CHARGE_LIMIT_OPTIONS),
+        CHARGE_LIMIT_OPTIONS[1] - CHARGE_LIMIT_OPTIONS[0],
+    ),
 }
 
 
@@ -48,6 +57,8 @@ class CarlinkoNumber(CarlinkoEntity, NumberEntity):
         self._attr_native_min_value = lo
         self._attr_native_max_value = hi
         self._attr_native_step = step
+        if spec.key == _CHARGE_LIMIT_KEY:
+            self._attr_mode = NumberMode.SLIDER
 
     @property
     def native_value(self) -> float | None:
@@ -62,6 +73,12 @@ class CarlinkoNumber(CarlinkoEntity, NumberEntity):
             f"async_set_native_value entity={key} "
             f"vehicle={partial_id(self.vehicle_id)} value={value}"
         )
+        if self.spec.key == _CHARGE_LIMIT_KEY:
+            # Cloud write; the coordinator validates, reads back and publishes.
+            await self.coordinator.async_set_charge_limit(self.vehicle_id, value)
+            _LOGGER.debug(f"async_write_ha_state entity={key}")
+            self.async_write_ha_state()
+            return
         result = self.coordinator.store.set_cost_config(key, value)
         if not result.get("ok"):
             err = result.get("error") or "set failed"

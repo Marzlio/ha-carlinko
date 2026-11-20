@@ -111,7 +111,10 @@ your vehicle supports the selected feature.
 
 ## Behaviour
 
-- Push updates over the CarLinko WebSocket (`iot_class: cloud_push`).
+- Push updates over the CarLinko WebSocket (`iot_class: cloud_push`). The stream
+  address comes from CarLinko and is normally plain `ws://`, so the auth token and
+  live telemetry are not encrypted on that connection — see
+  [SECURITY.md](SECURITY.md#the-live-stream-is-not-encrypted).
 - Vehicle **location** uses a separate REST call (`/maps/deviceLocate`), probed at
   setup and polled every 15 minutes when the car supports it.
 - **Notices** (operational types vehicle/control only): polled every 5 minutes;
@@ -122,6 +125,11 @@ your vehicle supports the selected feature.
 - **Firmware**: read-only check at startup and every 24 hours (plus
   `carlinko.check_firmware`). Does not download or start OTA. Until a real
   current firmware string is known, the probe may use `0.0.0` as the baseline.
+- **Charge limit**: read at startup and every 15 minutes from the car's saved
+  CarLinko settings; the number entity appears once the cloud returns a limit.
+  Setting it saves the value in CarLinko's cloud (the same call the app makes) and
+  reads it back. Only 80, 90 and 100 % are accepted, because those are the only
+  values the app's slider sends.
 - Entities come from the HA-free catalog in
   [`models/entity_specs.py`](custom_components/carlinko/models/entity_specs.py).
 - PHEV, direct TPMS, and capability-gated controls appear when the car reports
@@ -232,6 +240,13 @@ status stream.
 Per-wheel tyre pressure and temperature in the status blob (`tyre_indirect` is
 false). Indirect “check tyres” warnings alone do not enable this group.
 
+On these cars **Tyre status** turns to “Check tyres” when any wheel is outside a
+pressure band. The default band is 28–40 psi. The right band depends on the car's
+door-placard pressure, so a model can carry its own (`tyre_psi_min` /
+`tyre_psi_max` in `KNOWN_CAR_OVERRIDES`,
+[`consts.py`](custom_components/carlinko/common/consts.py)). Per-wheel pressures
+have not yet been checked against a dashboard reading on any model.
+
 | Name             | Entity type | Unit of measurement | Comments            |
 | ---------------- | ----------- | ------------------- | ------------------- |
 | Front left       | Sensor      | psi                 | —                   |
@@ -246,7 +261,8 @@ false). Indirect “check tyres” warnings alone do not enable this group.
 ### Remote control
 
 CarLinko exposes the function in `vehicleControlConfig` for your VIN (`cap:…` in
-the catalog).
+the catalog). Location and Charge limit are the exceptions: each is created once
+the cloud answers its own REST call for the car.
 
 | Name                | Entity type    | Unit of measurement | Comments                                    |
 | ------------------- | -------------- | ------------------- | ------------------------------------------- |
@@ -260,6 +276,7 @@ the catalog).
 | Find car            | Button         | —                   | —                                           |
 | Location            | Device tracker | —                   | Maps locate; created when cloud supports it |
 | Stop charging       | Button         | —                   | —                                           |
+| Charge limit        | Number         | %                   | Saved setting; 80, 90 or 100 %              |
 | Engine              | Switch         | —                   | —                                           |
 | Gear                | Select         | —                   | Available options: Low, High                |
 | Quick cool          | Button         | —                   | —                                           |
@@ -288,6 +305,10 @@ if you try another model.
 - Undocumented vendor API — no warranty; backends can change without notice.
 - Entities are capability-gated: only features the car reports are created.
 - Remote actions are real cloud actuation — use only on a car you own.
+- The live stream is normally unencrypted (`ws://`), and one CarLinko account may
+  hold only one session at a time — see [SECURITY.md](SECURITY.md).
+- Charge limit accepts only 80, 90 or 100 %, and the write call has not yet been
+  confirmed on a real car by this project.
 - API does not expose OEM brand, `sw_version` / `hw_version`, or a useful
   `configuration_url`.
 - Entities go unavailable after the availability window without a fresh frame

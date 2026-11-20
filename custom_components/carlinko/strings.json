@@ -335,6 +335,9 @@
       },
       "petrol_kml": {
         "name": "Petrol economy"
+      },
+      "charge_limit": {
+        "name": "Charge limit"
       }
     },
     "lock": {

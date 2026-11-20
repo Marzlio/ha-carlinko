@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "汽油经济性"
+      },
+      "charge_limit": {
+        "name": "充电上限"
       }
     },
     "lock": {

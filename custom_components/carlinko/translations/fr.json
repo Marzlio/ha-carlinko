@@ -255,6 +255,9 @@
       },
       "petrol_kml": {
         "name": "Consommation essence"
+      },
+      "charge_limit": {
+        "name": "Limite de charge"
       }
     },
     "lock": {

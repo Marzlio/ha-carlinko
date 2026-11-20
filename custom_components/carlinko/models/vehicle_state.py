@@ -10,6 +10,8 @@ from ..common.consts import (
     DEFAULT_BATTERY_KWH,
     DEFAULT_CHEMISTRY,
     DEFAULT_TPMS_SCALE,
+    DEFAULT_TYRE_PSI_MAX,
+    DEFAULT_TYRE_PSI_MIN,
     EMPTY_VEHICLE_STATE,
     KNOWN_CAR_OVERRIDES,
 )
@@ -47,6 +49,8 @@ class VehicleState:
         self.data = copy.deepcopy(EMPTY_VEHICLE_STATE)
         self._powertrain_cfg = "auto"
         self._tpms_scale = DEFAULT_TPMS_SCALE
+        self._tyre_psi_min = DEFAULT_TYRE_PSI_MIN
+        self._tyre_psi_max = DEFAULT_TYRE_PSI_MAX
         self._chemistry = DEFAULT_CHEMISTRY
 
     def update_metadata(self, creds):
@@ -61,6 +65,16 @@ class VehicleState:
         ).lower()
         self._tpms_scale = float(
             creds.get("tpms_scale") or known.get("tpms_scale") or DEFAULT_TPMS_SCALE
+        )
+        self._tyre_psi_min = float(
+            creds.get("tyre_psi_min")
+            or known.get("tyre_psi_min")
+            or DEFAULT_TYRE_PSI_MIN
+        )
+        self._tyre_psi_max = float(
+            creds.get("tyre_psi_max")
+            or known.get("tyre_psi_max")
+            or DEFAULT_TYRE_PSI_MAX
         )
         self._chemistry = (
             creds.get("chemistry") or known.get("chemistry") or DEFAULT_CHEMISTRY
@@ -101,6 +115,8 @@ class VehicleState:
         ctx = {
             "powertrain_cfg": self._powertrain_cfg,
             "tpms_scale": self._tpms_scale,
+            "tyre_psi_min": self._tyre_psi_min,
+            "tyre_psi_max": self._tyre_psi_max,
             "tyre_unit": new_data.get("tyre_unit"),
             "prev_odo": self.data.get("odo"),
         }
