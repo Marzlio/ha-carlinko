@@ -79,9 +79,25 @@ def test_chery_q_profile_matches_cloud_model_name() -> None:
     data = state.update_metadata({"vehicle": {"model": "Chery Q"}})
     assert data["battery_kwh"] == 42.7
     assert data["battery_kwh"] != DEFAULT_BATTERY_KWH
-    # No placard pressure on record yet, so the tyre band is still the default.
-    assert state._tyre_psi_min == DEFAULT_TYRE_PSI_MIN
-    assert state._tyre_psi_max == DEFAULT_TYRE_PSI_MAX
+    # Door placard 250 kPa (36.3 psi) front and rear: band is -20 % / +20 %.
+    assert state._tyre_psi_min == 29.0
+    assert state._tyre_psi_max == 43.5
+
+
+def _chery_q_tyre_status(raw: tuple[int, int, int, int]) -> str:
+    state = VehicleState()
+    state.update_metadata({"vehicle": {"model": "Chery Q"}})
+    return state.update_data(_tyre_blob(raw).hex())["tyre_status"]
+
+
+def test_chery_q_tyre_band_follows_door_placard() -> None:
+    # psi = raw * 1.373 * 0.145038
+    assert _chery_q_tyre_status((182, 182, 182, 182)) == "normal"  # placard, 36.2
+    assert _chery_q_tyre_status(_WARM) == "normal"  # 39.8-40.6, as first observed
+    assert _chery_q_tyre_status((146, 182, 182, 182)) == "normal"  # 29.1
+    assert _chery_q_tyre_status((145, 182, 182, 182)) == "check_tyres"  # 28.9
+    assert _chery_q_tyre_status((182, 182, 182, 218)) == "normal"  # 43.4
+    assert _chery_q_tyre_status((182, 182, 182, 219)) == "check_tyres"  # 43.6
 
 
 def _fuel_blob() -> str:

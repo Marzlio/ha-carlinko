@@ -390,11 +390,14 @@ KNOWN_CAR_OVERRIDES = {
     # Chery Q (ZA; the cloud reports model "Chery Q"). Pack size is the published South
     # African spec, not an owner measurement. Direct TPMS: the default 1.373 scale gives
     # plausible pressures (about 2.8 bar parked) but is not yet checked against the
-    # dash. No tyre band yet — add tyre_psi_min / tyre_psi_max from the door placard.
+    # dash. Tyre band: the door placard reads 250 kPa (36.3 psi) front and rear
+    # (owner-read on a 17-inch car); the band is that pressure -20 % / +20 %.
     # Battery-only car: "bev" stops stray fuel bytes from creating the PHEV sensors.
     "chery q": {
         "battery_kwh": 42.7,
         "powertrain": "bev",
+        "tyre_psi_min": 29.0,
+        "tyre_psi_max": 43.5,
     },
 }
 

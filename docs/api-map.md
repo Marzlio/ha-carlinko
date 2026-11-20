@@ -142,8 +142,9 @@ read about 275–280 kPa per wheel (40–41 psi) through the `data * 1.373` form
 a believable pressure for a newly delivered car, but it has **not** been compared with the
 dashboard, so the scale is still unvalidated. On direct-TPMS cars tyre status is `check_tyres`
 when any wheel is outside a psi band: 28–40 by default, or a model's own `tyre_psi_min` /
-`tyre_psi_max` in `KNOWN_CAR_OVERRIDES`. The Chery Q has no band of its own yet because its
-door-placard pressure is not on record.
+`tyre_psi_max` in `KNOWN_CAR_OVERRIDES`. The Chery Q's band is 29.0–43.5 psi: its door
+placard reads 250 kPa (36.3 psi) front and rear (owner-read on a 17-inch car), and the band
+is that pressure −20 % / +20 %. The +20 % side is a judgement call, not a standard.
 
 ## Standalone access — VALIDATED ✅
 
