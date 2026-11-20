@@ -129,7 +129,13 @@ your vehicle supports the selected feature.
   CarLinko settings; the number entity appears once the cloud returns a limit.
   Setting it saves the value in CarLinko's cloud (the same call the app makes) and
   reads it back. Only 80, 90 and 100 % are accepted, because those are the only
-  values the app's slider sends.
+  values the app's slider sends. Confirmed on a Chery Q (set to 80 %).
+- **Scheduled charging**: the same saved-settings read. Start time, duration,
+  weekdays and the on/off switch are written with the cloud schedule call
+  (`PUT /user/device/manage/batterySchedule`), which is the path the Chery SA
+  app uses. The CarLinko phone app prefers Bluetooth for this one command;
+  this integration does not. The controls appear once a charge limit is known.
+  The cloud write has not yet been tried on a car from Home Assistant.
 - Entities come from the HA-free catalog in
   [`models/entity_specs.py`](custom_components/carlinko/models/entity_specs.py).
 - PHEV, direct TPMS, and capability-gated controls appear when the car reports
@@ -261,8 +267,9 @@ have not yet been checked against a dashboard reading on any model.
 ### Remote control
 
 CarLinko exposes the function in `vehicleControlConfig` for your VIN (`cap:…` in
-the catalog). Location and Charge limit are the exceptions: each is created once
-the cloud answers its own REST call for the car.
+the catalog). Location, Charge limit and Scheduled charging are the exceptions:
+each is created once the cloud answers its own REST call for the car. Scheduled
+charging appears with the charge limit.
 
 | Name                | Entity type    | Unit of measurement | Comments                                    |
 | ------------------- | -------------- | ------------------- | ------------------------------------------- |
@@ -277,6 +284,10 @@ the cloud answers its own REST call for the car.
 | Location            | Device tracker | —                   | Maps locate; created when cloud supports it |
 | Stop charging       | Button         | —                   | —                                           |
 | Charge limit        | Number         | %                   | Saved setting; 80, 90 or 100 %              |
+| Scheduled charging  | Switch         | —                   | Cloud schedule on/off                       |
+| Schedule start      | Time           | —                   | Start time saved in the cloud               |
+| Schedule duration   | Number         | h                   | Whole hours, 1 to 24                        |
+| Charge Monday       | Switch         | —                   | One switch per weekday, through Sunday      |
 | Engine              | Switch         | —                   | —                                           |
 | Gear                | Select         | —                   | Available options: Low, High                |
 | Quick cool          | Button         | —                   | —                                           |
@@ -307,8 +318,10 @@ if you try another model.
 - Remote actions are real cloud actuation — use only on a car you own.
 - The live stream is normally unencrypted (`ws://`), and one CarLinko account may
   hold only one session at a time — see [SECURITY.md](SECURITY.md).
-- Charge limit accepts only 80, 90 or 100 %, and the write call has not yet been
-  confirmed on a real car by this project.
+- Charge limit accepts only 80, 90 or 100 %. The 80 % write was confirmed on a
+  Chery Q. Scheduled charging uses the cloud schedule call only; that write has
+  not yet been tried on a car from Home Assistant. Set a start time, a duration
+  and at least one day before turning it on.
 - API does not expose OEM brand, `sw_version` / `hw_version`, or a useful
   `configuration_url`.
 - Entities go unavailable after the availability window without a fresh frame

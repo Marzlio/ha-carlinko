@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Charge limit** number entity (80, 90 or 100 %), read from the car's saved CarLinko settings and written with the same call the app uses. It appears once the cloud returns a limit for the car. The write is taken from the app and not yet confirmed on a real car
+- **Charge limit** number entity (80, 90 or 100 %), read from the car's saved CarLinko settings and written with the same call the app uses. It appears once the cloud returns a limit for the car. The write was confirmed on a Chery Q (set to 80 %)
+- **Scheduled charging** controls (on/off, start time, duration in whole hours, and one switch per weekday). They use the cloud schedule call, the same one the Chery SA app uses, and skip the Bluetooth command the CarLinko phone app prefers. They appear once a charge limit is known. The cloud write has not yet been tried on a car from Home Assistant
 - Chery Q profile: battery size (42.7 kWh, published specification) so **Energy left** uses the right pack size, the car is fixed as battery-only so the PHEV fuel sensors are never created for it, and **Tyre status** uses a 29.0–43.5 psi band built around its 250 kPa (36 psi) door-placard pressure
 - Per-model tyre pressure band (`tyre_psi_min` / `tyre_psi_max`) for the direct-TPMS **Tyre status** check; the default stays 28–40 psi
 

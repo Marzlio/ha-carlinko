@@ -70,7 +70,7 @@ Use `(existing entry)` on setup when `entry.runtime_data` is already set (reload
 
 - **info:** `coordinator starting` / `coordinator stopping` / `coordinator stopped`, `CarLinko started`, `fleet change added=[…] removed=[…]`, `vehicle added starting ws …`, `vehicle removed stopping ws …`, `device registry removed vehicle=…`, `capability change vehicle=… added=[…] removed=[…]`, `location capability vehicle=… supported=… code=…`
 - **debug:** store loaded, `async_start → …`, `_async_wait_for_stream satisfied`, `_caps_refresh_loop`, `_location_poll_loop`, `async_send_control opcode=…` / `result ok`
-- **warning:** `no vehicle websocket connected within …s`, `auth failure source={setup\|ws\|caps_refresh\|control\|location_probe\|location_poll\|charge_settings_probe\|charge_settings_poll\|charge_limit} …`, remote control stale/failed, charge limit stale/failed/read-back mismatch
+- **warning:** `no vehicle websocket connected within …s`, `auth failure source={setup\|ws\|caps_refresh\|control\|location_probe\|location_poll\|charge_settings_probe\|charge_settings_poll\|charge_limit\|charge_schedule} …`, remote control stale/failed, charge limit stale/failed/read-back mismatch, charge schedule stale/failed/read-back mismatch
 - **error:** `starting reauth flow entry_id=…`, `setup failed entry_id=…` (missing/invalid region), then context lines (`WebSocket auth failed …`, `Caps refresh auth failed …`, `Location poll auth failed …`)
 
 Fleet membership: **one INFO summary** at coordinator; per-platform entity reconcile → **debug** in `entity_setup` (not 11× INFO).
@@ -81,12 +81,14 @@ Fleet membership: **one INFO summary** at coordinator; per-platform entity recon
 - **debug:** `GET /user/vehicle`, `POST /user/vehicle/remoteControl`, `POST /maps/deviceLocate`, `GET /user/vehicle/isOnline`, `deviceLocate code=50052 …`, stale-token retry, connect attempts, push frames
 - **warning:** `login failed`, `/user/vehicle returned no vehicles`, `remoteControl failed`, `remoteControl skipped vehicle_id/device_sn missing`, caps parse failures
 - **Charge limit:** **debug** `GET /user/device/manage/terminalNoticeConfig`, `PUT /user/device/manage/targetSoc`; **info** `targetSoc value=… vehicle=… code=…`; **warning** `targetSoc failed …`, `targetSoc skipped …` (missing vehicle id or a value other than 80 / 90 / 100)
+- **Charge schedule:** **debug** `PUT /user/device/manage/batterySchedule`; **info** `batterySchedule enabled=… hour=… minute=… duration=… vehicle=… code=…` and `charge schedule held vehicle=… waiting for start time, duration and a day`; **warning** `batterySchedule failed …`, `batterySchedule skipped …`, `charge schedule failed …`, `charge schedule stale token …`, `charge schedule read-back mismatch … field=… sent=… stored=…`
 
 ## Entities
 
 - **base_entity:** **info** `remote action entity=… action=… vehicle=… opcode=…`; **warning** `remote action failed no opcode …`
 - **number / store:** **info** successful `local config set`; **warning** validation rejected (no success INFO on failed set); **debug** save path; **exception** on persist failure
 - **number (charge limit):** the platform only logs the **debug** `async_set_native_value` line; the outcome is logged by `coordinator.async_set_charge_limit` (**warning** `charge limit failed …`, `charge limit stale token …`, `charge limit read-back mismatch … sent=… stored=…`) and by `api_client`
+- **switch / time / number (charge schedule):** the platform only logs the **debug** set line; the outcome is logged by `coordinator.async_set_charge_schedule` and by `api_client`
 
 ## Message style
 
@@ -140,5 +142,6 @@ When touching code, know which flow you are in:
 6. Local entity action — cost `number` + `store`
 7. Remote entity action — `base_entity` → `async_send_control` → `api_client.send_control`
 8. Saved cloud setting — charge limit `number` → `async_set_charge_limit` → `api_client.set_charge_limit`, then a read-back
+9. Saved cloud setting — charge schedule `switch` / `time` / `number` → `async_set_charge_schedule` → `api_client.set_charge_schedule`, then a read-back. A partial edit logs `charge schedule held` and does not call the API
 
 New logs should fit the level rules for that flow without duplicating another layer’s outcome.

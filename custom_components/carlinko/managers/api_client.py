@@ -49,6 +49,7 @@ from ..common.helpers import (
     partial_id,
     seat_max,
 )
+from ..models.charge_schedule import battery_schedule_body
 from ..models.exceptions import AuthError
 from ..models.vehicle_images import image_urls_from_row
 
@@ -56,8 +57,14 @@ _LOGGER = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
 _TARGET_SOC_PATH = "/user/device/manage/targetSoc"
+_BATTERY_SCHEDULE_PATH = "/user/device/manage/batterySchedule"
 _QUERY_SKIP_PATHS = frozenset(
-    {"/user/login", "/user/vehicle/remoteControl", _TARGET_SOC_PATH}
+    {
+        "/user/login",
+        "/user/vehicle/remoteControl",
+        _TARGET_SOC_PATH,
+        _BATTERY_SCHEDULE_PATH,
+    }
 )
 _ACCOUNT_QUERY_KEYS = frozenset({"GET /pub/timestamp", "GET /user/vehicle"})
 
@@ -223,11 +230,27 @@ class ApiClient:
         """Corrected UTC milliseconds (local + server skew)."""
         return str(int(time.time() * 1000) + int(self._time_skew_ms))
 
+    @staticmethod
+    def _sign_text(value: Any) -> str:
+        """Text form of one signed field.
+
+        Scalars stay ``str(value)`` (the form charge-limit writes already use).
+        Booleans and lists use compact JSON text so ``true`` / ``[true,false]``
+        match the app's encoder instead of Python's ``True`` / ``[True, False]``.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (list, dict)):
+            return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+        return str(value)
+
     def sign(self, params):
         if not self.sign_key:
             raise RuntimeError("sign_key missing")
 
-        m = {k: ("" if v is None else str(v)) for k, v in params.items()}
+        m = {k: self._sign_text(v) for k, v in params.items()}
         ordered = {k: m[k] for k in sorted(m.keys())}
         msg = json.dumps(ordered, separators=(",", ":"), ensure_ascii=False).encode()
 
@@ -940,6 +963,51 @@ class ApiClient:
                 f"code={d.get('code')} msg={d.get('msg')}"
             )
 
+        return d
+
+    async def set_charge_schedule(
+        self, vehicle_id: str, settings: dict[str, Any]
+    ) -> dict:
+        """PUT /user/device/manage/batterySchedule — save the charge schedule.
+
+        Cloud path only (the same call Chery SA uses). The Bluetooth schedule
+        command is not sent. ``settings`` uses Monday-first ``schedule_days``.
+        """
+        self.reload_ids_from_store()
+
+        vid = str(vehicle_id or "").strip()
+        if not vid:
+            _LOGGER.warning("batterySchedule skipped vehicle_id missing")
+            return {"code": "-1", "msg": "vehicle_id missing"}
+
+        body = battery_schedule_body(vid, settings)
+        if body is None:
+            _LOGGER.warning(
+                f"batterySchedule skipped vehicle={partial_id(vid)} "
+                "schedule incomplete"
+            )
+            return {"code": "-1", "msg": "charge schedule is incomplete"}
+
+        _LOGGER.debug(f"PUT {_BATTERY_SCHEDULE_PATH}")
+
+        d = await self._request_authed(
+            lambda tok: self._put(
+                _BATTERY_SCHEDULE_PATH, body, token=tok, log_vehicle_id=vid
+            ),
+            path=_BATTERY_SCHEDULE_PATH,
+        )
+
+        code = str(d.get("code") or "")
+        _LOGGER.info(
+            f"batterySchedule enabled={body['enabled']} hour={body['hour']} "
+            f"minute={body['minute']} duration={body['duration']} "
+            f"vehicle={partial_id(vid)} code={d.get('code')}"
+        )
+        if code not in (OK_CODE, "0"):
+            _LOGGER.warning(
+                f"batterySchedule failed vehicle={partial_id(vid)} "
+                f"code={d.get('code')} msg={d.get('msg')}"
+            )
         return d
 
     async def get_ws_connect(self, device_sn: str) -> str | None:

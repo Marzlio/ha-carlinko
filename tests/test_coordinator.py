@@ -690,3 +690,129 @@ async def test_async_set_charge_limit_unknown_vehicle(hass: HomeAssistant) -> No
         with pytest.raises(HomeAssistantError):
             await coordinator.async_set_charge_limit("other", 80)
         set_limit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_probe_charge_settings_reads_the_cloud_schedule(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    with patch.object(
+        coordinator.api,
+        "get_charge_settings",
+        new_callable=AsyncMock,
+        return_value={
+            "targetSoc": 80,
+            "batterySchedule": {
+                "enabled": True,
+                "hour": 22,
+                "minute": 0,
+                "duration": 6,
+                "week": [False, False, False, False, False, False, True],
+            },
+        },
+    ):
+        snapshot = await coordinator._probe_charge_settings("v1")
+
+    assert snapshot["schedule_enabled"] is True
+    assert snapshot["schedule_hour"] == 22
+    assert snapshot["schedule_minute"] == 0
+    assert snapshot["schedule_duration"] == 6
+    assert snapshot["schedule_days"] == [True, False, False, False, False, False, False]
+    assert "charge_schedule" in coordinator.current_spec_keys("v1")
+    assert (
+        coordinator.store.get_vehicle_meta("v1")["charge_schedule"]["schedule_hour"]
+        == 22
+    )
+
+
+@pytest.mark.asyncio
+async def test_charge_schedule_holds_until_it_is_complete(hass: HomeAssistant) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    with patch.object(
+        coordinator.api, "set_charge_schedule", new_callable=AsyncMock
+    ) as write:
+        await coordinator.async_set_charge_schedule("v1", hour=21, minute=0)
+        write.assert_not_called()
+        with pytest.raises(HomeAssistantError):
+            await coordinator.async_set_charge_schedule("v1", enabled=True)
+        write.assert_not_called()
+
+    settings = coordinator.vehicle_data("v1")["charge_settings"]
+    assert settings["schedule_hour"] == 21
+    assert settings.get("schedule_enabled") is not True
+
+
+@pytest.mark.asyncio
+async def test_charge_schedule_writes_the_merged_cloud_body(
+    hass: HomeAssistant,
+) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    coordinator._vehicles["v1"].vehicle_state.data["charge_settings"] = {
+        "target_soc": 80,
+        "schedule_enabled": False,
+        "schedule_hour": 22,
+        "schedule_minute": 30,
+        "schedule_duration": 6,
+        "schedule_days": [True, False, False, False, False, False, False],
+    }
+    with (
+        patch.object(
+            coordinator.api,
+            "set_charge_schedule",
+            new_callable=AsyncMock,
+            return_value={"code": "0000"},
+        ) as write,
+        patch.object(
+            coordinator.api,
+            "get_charge_settings",
+            new_callable=AsyncMock,
+            return_value={
+                "targetSoc": 80,
+                "batterySchedule": {
+                    "enabled": True,
+                    "hour": 22,
+                    "minute": 30,
+                    "duration": 6,
+                    "week": [False, False, False, False, False, False, True],
+                },
+            },
+        ),
+    ):
+        stored = await coordinator.async_set_charge_schedule("v1", enabled=True)
+
+    sent = write.await_args.args[1]
+    assert sent["schedule_enabled"] is True
+    assert sent["schedule_hour"] == 22
+    assert sent["schedule_days"][0] is True
+    assert stored["schedule_enabled"] is True
+    assert coordinator.vehicle_data("v1")["charge_settings"]["target_soc"] == 80
+
+
+@pytest.mark.asyncio
+async def test_charge_limit_write_keeps_the_schedule(hass: HomeAssistant) -> None:
+    coordinator, _ = _charge_coordinator(hass)
+    coordinator._vehicles["v1"].vehicle_state.data["charge_settings"] = {
+        "target_soc": 100,
+        "schedule_hour": 6,
+        "schedule_days": [True, True, True, True, True, False, False],
+    }
+    with (
+        patch.object(
+            coordinator.api,
+            "set_charge_limit",
+            new_callable=AsyncMock,
+            return_value={"code": "0000"},
+        ),
+        patch.object(
+            coordinator.api,
+            "get_charge_settings",
+            new_callable=AsyncMock,
+            return_value={"targetSoc": 80},
+        ),
+    ):
+        await coordinator.async_set_charge_limit("v1", 80)
+
+    settings = coordinator.vehicle_data("v1")["charge_settings"]
+    assert settings["target_soc"] == 80
+    assert settings["schedule_hour"] == 6

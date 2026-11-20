@@ -90,7 +90,7 @@ Shared contract for integration and engine. Named HA lines, flows, and `caplog` 
 
 **Redaction.** Never log passwords, tokens, sign keys, full request/response bodies, VIN, or plate. Use `partial_id` / `mask_email`. (Availability INFO currently logs a full vehicle id by existing convention — see logging.md; do not spread that pattern.)
 
-**Diagnostics vs logs.** In-memory HTTP snapshots for HA diagnostics (`ApiClient` query log) are not `_LOGGER`. Do not INFO-dump those records. Login / remoteControl / targetSoc (charge limit write) stay out of that snapshot store.
+**Diagnostics vs logs.** In-memory HTTP snapshots for HA diagnostics (`ApiClient` query log) are not `_LOGGER`. Do not INFO-dump those records. Login / remoteControl / targetSoc (charge limit write) / batterySchedule (charge schedule write) stay out of that snapshot store.
 
 **Home Assistant:** do not attach handlers. HA sets the level for `custom_components.carlinko`.
 

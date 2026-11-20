@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .common.base_entity import CarlinkoEntity
+from .common.consts import CHARGE_SCHEDULE_DAY_KEYS
 from .common.entity_setup import async_setup_entities
 from .managers.coordinator import CarlinkoCoordinator
 from .models.entity_specs import EntitySpec
@@ -49,8 +50,35 @@ class CarlinkoSwitch(CarlinkoEntity, SwitchEntity):
             return value
         return str(value).lower() in ("on", "true", "1")
 
+    def _schedule_day_index(self) -> int | None:
+        prefix = "charge_schedule_"
+        if not self.spec.key.startswith(prefix):
+            return None
+        day = self.spec.key[len(prefix) :]
+        if day not in CHARGE_SCHEDULE_DAY_KEYS:
+            return None
+        return CHARGE_SCHEDULE_DAY_KEYS.index(day)
+
+    async def _async_set_schedule(self, **changes) -> None:
+        await self.coordinator.async_set_charge_schedule(self.vehicle_id, **changes)
+        self.async_write_ha_state()
+
     async def async_turn_on(self, **kwargs) -> None:
+        if self.spec.key == "charge_schedule":
+            await self._async_set_schedule(enabled=True)
+            return
+        day_index = self._schedule_day_index()
+        if day_index is not None:
+            await self._async_set_schedule(day_index=day_index, day_on=True)
+            return
         await self._async_send_action("on")
 
     async def async_turn_off(self, **kwargs) -> None:
+        if self.spec.key == "charge_schedule":
+            await self._async_set_schedule(enabled=False)
+            return
+        day_index = self._schedule_day_index()
+        if day_index is not None:
+            await self._async_set_schedule(day_index=day_index, day_on=False)
+            return
         await self._async_send_action("off")

@@ -280,6 +280,9 @@
       },
       "charge_limit": {
         "name": "מגבלת טעינה"
+      },
+      "charge_schedule_duration": {
+        "name": "Scheduled charging duration"
       }
     },
     "lock": {
@@ -338,6 +341,30 @@
       },
       "steer_heat": {
         "name": "חימום ההגה"
+      },
+      "charge_schedule": {
+        "name": "Scheduled charging"
+      },
+      "charge_schedule_mon": {
+        "name": "Charge Monday"
+      },
+      "charge_schedule_tue": {
+        "name": "Charge Tuesday"
+      },
+      "charge_schedule_wed": {
+        "name": "Charge Wednesday"
+      },
+      "charge_schedule_thu": {
+        "name": "Charge Thursday"
+      },
+      "charge_schedule_fri": {
+        "name": "Charge Friday"
+      },
+      "charge_schedule_sat": {
+        "name": "Charge Saturday"
+      },
+      "charge_schedule_sun": {
+        "name": "Charge Sunday"
       }
     },
     "select": {
@@ -435,6 +462,11 @@
       },
       "vehicle_top": {
         "name": "מלמעלה"
+      }
+    },
+    "time": {
+      "charge_schedule_time": {
+        "name": "Scheduled charging start"
       }
     }
   },

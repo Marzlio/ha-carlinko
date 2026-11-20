@@ -10,7 +10,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .common.base_entity import CarlinkoEntity
-from .common.consts import CHARGE_LIMIT_OPTIONS
+from .common.consts import (
+    CHARGE_LIMIT_OPTIONS,
+    CHARGE_SCHEDULE_DURATION_MAX,
+    CHARGE_SCHEDULE_DURATION_MIN,
+)
 from .common.entity_setup import async_setup_entities
 from .common.helpers import partial_id
 from .managers.coordinator import CarlinkoCoordinator
@@ -21,6 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 1
 
 _CHARGE_LIMIT_KEY = "charge_limit"
+_CHARGE_SCHEDULE_DURATION_KEY = "charge_schedule_duration"
 
 _LIMITS = {
     "tariff": (0, 1e7, 0.01),
@@ -31,6 +36,11 @@ _LIMITS = {
         min(CHARGE_LIMIT_OPTIONS),
         max(CHARGE_LIMIT_OPTIONS),
         CHARGE_LIMIT_OPTIONS[1] - CHARGE_LIMIT_OPTIONS[0],
+    ),
+    _CHARGE_SCHEDULE_DURATION_KEY: (
+        CHARGE_SCHEDULE_DURATION_MIN,
+        CHARGE_SCHEDULE_DURATION_MAX,
+        1,
     ),
 }
 
@@ -57,7 +67,7 @@ class CarlinkoNumber(CarlinkoEntity, NumberEntity):
         self._attr_native_min_value = lo
         self._attr_native_max_value = hi
         self._attr_native_step = step
-        if spec.key == _CHARGE_LIMIT_KEY:
+        if spec.key in (_CHARGE_LIMIT_KEY, _CHARGE_SCHEDULE_DURATION_KEY):
             self._attr_mode = NumberMode.SLIDER
 
     @property
@@ -76,6 +86,13 @@ class CarlinkoNumber(CarlinkoEntity, NumberEntity):
         if self.spec.key == _CHARGE_LIMIT_KEY:
             # Cloud write; the coordinator validates, reads back and publishes.
             await self.coordinator.async_set_charge_limit(self.vehicle_id, value)
+            _LOGGER.debug(f"async_write_ha_state entity={key}")
+            self.async_write_ha_state()
+            return
+        if self.spec.key == _CHARGE_SCHEDULE_DURATION_KEY:
+            await self.coordinator.async_set_charge_schedule(
+                self.vehicle_id, duration=value
+            )
             _LOGGER.debug(f"async_write_ha_state entity={key}")
             self.async_write_ha_state()
             return

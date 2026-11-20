@@ -41,6 +41,11 @@ REST_STATE_POLL_INTERVAL_S = 60
 CHARGE_SETTINGS_POLL_INTERVAL_S = 900
 # The only charge limits the CarLinko app sends: its slider snaps to these anchors.
 CHARGE_LIMIT_OPTIONS = (80, 90, 100)
+# Scheduled charging weekdays, Monday first (the app reverses this on the wire).
+CHARGE_SCHEDULE_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# Whole hours the schedule duration slider offers. The cloud stores an int.
+CHARGE_SCHEDULE_DURATION_MIN = 1
+CHARGE_SCHEDULE_DURATION_MAX = 24
 # Cloud: vehicle control / locate function unavailable.
 LOCATION_UNSUPPORTED_CODES = frozenset({"50049"})
 # Notice page types that are operational (not CMS/marketing).
@@ -67,6 +72,7 @@ PLATFORMS = (
     "sensor",
     "binary_sensor",
     "number",
+    "time",
     "lock",
     "climate",
     "cover",
@@ -119,6 +125,7 @@ REST_META_KEYS = (
     "firmware_upgrading",
     "charge_settings_last_poll",
     "charge_limit",
+    "charge_schedule",
 )
 # Union used by store.set_vehicles when merging prior meta.
 PRESERVED_VEHICLE_META_KEYS = LOCATION_META_KEYS + REST_META_KEYS

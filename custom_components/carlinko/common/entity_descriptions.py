@@ -23,6 +23,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.components.switch import SwitchEntityDescription
+from homeassistant.components.time import TimeEntityDescription
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfElectricPotential,
@@ -51,6 +52,7 @@ _UNIT_MAP: dict[str, str] = {
     "V": UnitOfElectricPotential.VOLT,
     "kW": UnitOfPower.KILO_WATT,
     "min": UnitOfTime.MINUTES,
+    "h": UnitOfTime.HOURS,
     "%": PERCENTAGE,
 }
 
@@ -145,6 +147,8 @@ def get_entity_description(spec: EntitySpec) -> EntityDescription:
         return ButtonEntityDescription(**base)
     if platform == "switch":
         return SwitchEntityDescription(**base)
+    if platform == "time":
+        return TimeEntityDescription(**base)
     if platform == "device_tracker":
         return EntityDescription(**base)
     if platform == "image":

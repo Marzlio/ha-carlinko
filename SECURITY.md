@@ -22,7 +22,7 @@ cloud only (WebSocket + REST for login and remote control).
 
 ## The live stream is not encrypted
 
-REST calls (login, vehicle list, remote control, charge limit) go over HTTPS. The live
+REST calls (login, vehicle list, remote control, charge limit, charge schedule) go over HTTPS. The live
 status stream does not have to: CarLinko's cloud hands out the stream address (the
 official app asks for it the same way), and the address documented for this project is
 plain `ws://…:4002`. The built-in fallback address is also `ws://`.

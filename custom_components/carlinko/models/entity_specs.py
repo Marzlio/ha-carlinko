@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable
 
+from ..common.consts import CHARGE_SCHEDULE_DAY_KEYS
+
 
 @dataclass(frozen=True, kw_only=True)
 class EntitySpec:
@@ -671,6 +673,56 @@ ENTITY_SPECS: tuple[EntitySpec, ...] = (
         when="charge_limit",
         cloud_rest=True,
     ),
+    # Cloud schedule (PUT /user/device/manage/batterySchedule). Same saved-settings
+    # read as the charge limit. Not the app's Bluetooth schedule command.
+    EntitySpec(
+        key="charge_schedule",
+        platform="switch",
+        name="Scheduled charging",
+        data_path="charge_settings.schedule_enabled",
+        icon="mdi:calendar-clock",
+        when="charge_schedule",
+        cloud_rest=True,
+    ),
+    EntitySpec(
+        key="charge_schedule_time",
+        platform="time",
+        name="Scheduled charging start",
+        data_path="charge_settings.schedule_hour",
+        icon="mdi:clock-outline",
+        when="charge_schedule",
+        cloud_rest=True,
+    ),
+    EntitySpec(
+        key="charge_schedule_duration",
+        platform="number",
+        name="Scheduled charging duration",
+        data_path="charge_settings.schedule_duration",
+        unit="h",
+        icon="mdi:timer-outline",
+        when="charge_schedule",
+        cloud_rest=True,
+    ),
+    *(
+        EntitySpec(
+            key=f"charge_schedule_{day}",
+            platform="switch",
+            name={
+                "mon": "Monday",
+                "tue": "Tuesday",
+                "wed": "Wednesday",
+                "thu": "Thursday",
+                "fri": "Friday",
+                "sat": "Saturday",
+                "sun": "Sunday",
+            }[day],
+            data_path=f"charge_settings.schedule_days.{index}",
+            icon="mdi:calendar-week",
+            when="charge_schedule",
+            cloud_rest=True,
+        )
+        for index, day in enumerate(CHARGE_SCHEDULE_DAY_KEYS)
+    ),
     EntitySpec(
         key="engine",
         platform="switch",
@@ -847,6 +899,18 @@ def _when_charge_limit(state: dict, _caps: dict) -> bool:
     return isinstance(settings, dict) and settings.get("target_soc") is not None
 
 
+def _when_charge_schedule(state: dict, _caps: dict) -> bool:
+    settings = state.get("charge_settings")
+    if not isinstance(settings, dict):
+        return False
+    if settings.get("target_soc") is not None:
+        return True
+    return any(
+        settings.get(key) is not None
+        for key in ("schedule_enabled", "schedule_hour", "schedule_days")
+    )
+
+
 def _cap_windows(caps: dict) -> bool:
     w = caps.get("windows") or {}
     return bool(w.get("open") or w.get("close") or w.get("vent"))
@@ -881,6 +945,7 @@ _WHEN: dict[str, Callable[[dict, dict], bool]] = {
     "phev": _when_phev,
     "direct_tpms": _when_direct_tpms,
     "charge_limit": _when_charge_limit,
+    "charge_schedule": _when_charge_schedule,
 }
 
 # Exact cap: paths with non-default truthiness. seats.* uses startswith below.

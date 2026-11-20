@@ -588,10 +588,12 @@ Blob layout: see [api-map.md](api-map.md) (WS action 6). HA polls this only whil
 }
 ```
 
-Only `targetSoc` (charge limit, percent) is used. The object also carries the alert
-toggles and a `batterySchedule` entry; their value types are not modelled here. HA
-reads this at startup, every 15 minutes, and after each charge-limit write. Read
-confirmed on a Chery Q (`saf`).
+`targetSoc` (charge limit, percent) and `batterySchedule` (charge schedule) are
+used. The object also carries alert toggles; those are not modelled here.
+`batterySchedule` is `{duration, enabled, hour, minute, week}` — see section 16
+for the weekday order. HA reads this at startup, every 15 minutes, and after each
+charge-limit or schedule write. The charge-limit read was confirmed on a Chery Q
+(`saf`).
 
 ---
 
@@ -640,8 +642,71 @@ The app's charge-limit slider snaps to three anchors — **80, 90, 100** — so 
 are the only values it ever sends. `ApiClient.set_charge_limit` refuses anything else
 before making a request, because the server's handling of other values is unknown.
 
-**Status:** contract taken from the app decompile (CarLinko 1.14.x). The write has
-**not** been exercised against a live car by this project.
+**Status:** contract taken from the app decompile (CarLinko 1.14.x). The write was
+confirmed on a Chery Q: Home Assistant set 80 % and a later read returned 80 %.
+
+---
+
+## 16. `PUT /user/device/manage/batterySchedule`
+
+**Auth:** signed headers + token, `content-type: application/json`
+**Client:** save the charge schedule (`HttpRequestInterface.batterySchedule`, body
+bean `BatteryScheduleParams`)
+
+This is the cloud schedule call. The CarLinko phone app sends the same body over
+Bluetooth when the phone is connected to the car, then only notifies the server.
+The Chery SA app has the cloud call and no Bluetooth schedule command. Home
+Assistant uses the cloud call only.
+
+### Request body
+
+```json
+{
+  "duration": 6,
+  "enabled": true,
+  "hour": 22,
+  "minute": 30,
+  "vehicleId": 42,
+  "week": [false, false, false, false, false, false, true]
+}
+```
+
+The body has **no** `timestamp` field. `duration`, `hour` and `minute` are whole
+numbers. `duration` is hours (the app's picker shows a number plus a one-character
+unit, then parses the number). `vehicleId` is a number when the id is all digits.
+
+`week` has seven booleans, **Sunday first** through Saturday. The app's screen
+lists Monday → Sunday and reverses that list before the request, and reverses it
+again when it loads a saved schedule. Home Assistant shows Monday → Sunday and
+reverses only on the wire. In the example above only Monday is selected.
+
+The schedule screen refuses to save when no day is selected. Turning the schedule
+off sends `enabled: false` with the saved time and days left as they are.
+
+### Sign payload
+
+Same fields as the body, plus `timestamp`. Booleans and `week` are signed as
+compact JSON text (`true`, `[false,false,false,false,false,false,true]`), because
+Python's own text for those values does not match the app.
+
+### Response
+
+```json
+{
+  "code": "0000",
+  "msg": "...",
+  "data": null
+}
+```
+
+`0000` = saved; `9997` = token invalid → re-login.
+
+The saved schedule is read back from `batterySchedule` inside
+`GET /user/device/manage/terminalNoticeConfig/{vehicleId}` (section 14).
+
+**Status:** contract taken from the CarLinko 1.14.x decompile and compared with
+the Chery SA app, which calls this path and does not contain the Bluetooth
+schedule command. The write has **not** been sent to a live car by this project.
 
 ---
 
@@ -664,3 +729,4 @@ before making a request, because the server's handling of other values is unknow
 | GET    | `/user/vehicle/state/{vehicleId}`                      | path id; sign `id`                              | telemetry hex                    |
 | GET    | `/user/device/manage/terminalNoticeConfig/{vehicleId}` | path id; sign `vehicleId`                       | saved settings incl. `targetSoc` |
 | PUT    | `/user/device/manage/targetSoc`                        | `targetSoc` (80 / 90 / 100), `vehicleId`        | not known                        |
+| PUT    | `/user/device/manage/batterySchedule`                  | `enabled`, `hour`, `minute`, `duration`, `week` | not known                        |

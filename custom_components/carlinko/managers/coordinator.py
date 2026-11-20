@@ -29,6 +29,9 @@ from ..common.consts import (
     AVAILABILITY_SECONDS,
     CAPS_REFRESH_INTERVAL_S,
     CHARGE_LIMIT_OPTIONS,
+    CHARGE_SCHEDULE_DAY_KEYS,
+    CHARGE_SCHEDULE_DURATION_MAX,
+    CHARGE_SCHEDULE_DURATION_MIN,
     CHARGE_SETTINGS_POLL_INTERVAL_S,
     CONF_AVAILABILITY_SECONDS,
     CONF_EMAIL,
@@ -65,6 +68,11 @@ from ..common.helpers import (
 )
 from ..managers.api_client import ApiClient, meta_from_api_row, vehicle_id_of
 from ..managers.ws_client import WsClient
+from ..models.charge_schedule import (
+    SCHEDULE_STATE_KEYS,
+    parse_battery_schedule,
+    schedule_is_ready,
+)
 from ..models.entity_specs import get_entity_specs
 from ..models.exceptions import AuthError
 from ..models.vehicle_images import IMAGE_ANGLES
@@ -319,6 +327,11 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data["charge_settings"]["target_soc"] = _as_percent(
                 meta.get("charge_limit")
             )
+        saved_schedule = meta.get("charge_schedule")
+        if isinstance(saved_schedule, dict):
+            for key in SCHEDULE_STATE_KEYS:
+                if key in saved_schedule:
+                    data["charge_settings"][key] = saved_schedule.get(key)
 
     async def _probe_location(self, vehicle_id: str, *, force: bool = False) -> None:
         """One locate call; update capability + coords. Never raises for setup."""
@@ -1094,12 +1107,24 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 rt.vehicle_state.data.get("charge_settings") or {"target_soc": None}
             )
         snapshot = {"target_soc": _as_percent(config.get("targetSoc"))}
+        parsed = parse_battery_schedule(config.get("batterySchedule"))
+        previous = {}
+        if rt is not None:
+            previous = dict(rt.vehicle_state.data.get("charge_settings") or {})
+        if parsed is not None:
+            snapshot.update(parsed)
+        else:
+            for key in SCHEDULE_STATE_KEYS:
+                if key in previous:
+                    snapshot[key] = previous[key]
         if rt is not None:
             rt.vehicle_state.data["charge_settings"] = dict(snapshot)
+        schedule_meta = {key: snapshot.get(key) for key in SCHEDULE_STATE_KEYS}
         self.store.update_vehicle_meta(
             vid,
             charge_settings_last_poll=time.time(),
             charge_limit=snapshot["target_soc"],
+            charge_schedule=schedule_meta,
         )
         if rt is not None:
             rt.meta = self.store.get_vehicle_meta(vid)
@@ -1402,7 +1427,9 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Cloud accepted it: show the new value now, then confirm with a read-back.
         rt = self._vehicles.get(vid)
         if rt is not None:
-            rt.vehicle_state.data["charge_settings"] = {"target_soc": target}
+            settings = dict(rt.vehicle_state.data.get("charge_settings") or {})
+            settings["target_soc"] = target
+            rt.vehicle_state.data["charge_settings"] = settings
         self.store.update_vehicle_meta(vid, charge_limit=target)
         if rt is not None:
             rt.meta = self.store.get_vehicle_meta(vid)
@@ -1423,6 +1450,192 @@ class CarlinkoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._publish_data()
         self._maybe_notify_spec_changes(vid)
         return stored
+
+    def _copy_charge_settings(self, vehicle_id: str) -> dict[str, Any]:
+        rt = self._vehicles.get(vehicle_id)
+        if rt is None:
+            return {"target_soc": None}
+        return dict(rt.vehicle_state.data.get("charge_settings") or {})
+
+    def _store_charge_schedule(self, vehicle_id: str, settings: dict[str, Any]) -> None:
+        rt = self._vehicles.get(vehicle_id)
+        if rt is not None:
+            rt.vehicle_state.data["charge_settings"] = dict(settings)
+        self.store.update_vehicle_meta(
+            vehicle_id,
+            charge_schedule={key: settings.get(key) for key in SCHEDULE_STATE_KEYS},
+        )
+        if rt is not None:
+            rt.meta = self.store.get_vehicle_meta(vehicle_id)
+
+    @staticmethod
+    def _require_schedule_int(value: float, low: int, high: int, label: str) -> int:
+        if isinstance(value, bool) or isinstance(value, str):
+            number = None
+        elif isinstance(value, float) and not value.is_integer():
+            number = None
+        else:
+            try:
+                number = int(value)
+            except (TypeError, ValueError, OverflowError):
+                number = None
+        if number is None or number < low or number > high:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_failed",
+                translation_placeholders={
+                    "error": f"{label} must be a whole number from {low} to {high}"
+                },
+            )
+        return number
+
+    async def async_set_charge_schedule(
+        self,
+        vehicle_id: str,
+        *,
+        enabled: bool | None = None,
+        hour: int | None = None,
+        minute: int | None = None,
+        duration: float | None = None,
+        day_index: int | None = None,
+        day_on: bool | None = None,
+    ) -> dict[str, Any]:
+        """Save the cloud charge schedule, merging onto the last known one.
+
+        A partial edit (time only, or one weekday) is kept locally until the
+        start time, duration, enabled flag and at least one day are all set.
+        Turning the schedule on before that raises, so the switch stays off.
+        """
+        vid = self._require_vehicle(vehicle_id)
+        settings = self._copy_charge_settings(vid)
+        if enabled is not None:
+            if not isinstance(enabled, bool):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="control_failed",
+                    translation_placeholders={
+                        "error": "scheduled charging must be on or off"
+                    },
+                )
+            settings["schedule_enabled"] = enabled
+        if hour is not None:
+            settings["schedule_hour"] = self._require_schedule_int(hour, 0, 23, "hour")
+        if minute is not None:
+            settings["schedule_minute"] = self._require_schedule_int(
+                minute, 0, 59, "minute"
+            )
+        if duration is not None:
+            settings["schedule_duration"] = self._require_schedule_int(
+                duration,
+                CHARGE_SCHEDULE_DURATION_MIN,
+                CHARGE_SCHEDULE_DURATION_MAX,
+                "duration",
+            )
+        if day_index is not None:
+            if (
+                isinstance(day_index, bool)
+                or not isinstance(day_index, int)
+                or day_index < 0
+                or day_index >= len(CHARGE_SCHEDULE_DAY_KEYS)
+                or not isinstance(day_on, bool)
+            ):
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="control_failed",
+                    translation_placeholders={
+                        "error": "charge schedule day is invalid"
+                    },
+                )
+            days = settings.get("schedule_days")
+            if not isinstance(days, list) or len(days) != len(CHARGE_SCHEDULE_DAY_KEYS):
+                days = [False] * len(CHARGE_SCHEDULE_DAY_KEYS)
+            else:
+                days = [bool(day) if isinstance(day, bool) else False for day in days]
+            days[day_index] = day_on
+            settings["schedule_days"] = days
+
+        if not schedule_is_ready(settings):
+            if enabled is True:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="control_failed",
+                    translation_placeholders={
+                        "error": (
+                            "Set a start time, a duration and at least one day "
+                            "before turning scheduled charging on"
+                        )
+                    },
+                )
+            self._store_charge_schedule(vid, settings)
+            _LOGGER.info(
+                f"charge schedule held vehicle={partial_id(vid)} "
+                "waiting for start time, duration and a day"
+            )
+            self._publish_data()
+            self._maybe_notify_spec_changes(vid)
+            return {key: settings.get(key) for key in SCHEDULE_STATE_KEYS}
+
+        _LOGGER.debug(f"async_set_charge_schedule vehicle={partial_id(vid)}")
+        try:
+            result = await self.api.set_charge_schedule(vid, settings)
+        except Exception as err:
+            if _is_auth_error(err):
+                await self._async_handle_auth_failure(err, source="charge_schedule")
+                raise ConfigEntryAuthFailed(
+                    translation_domain=DOMAIN,
+                    translation_key="auth_failed",
+                ) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        code = str(result.get("code") or "")
+        if code in STALE_TOKEN_CODES:
+            _LOGGER.warning(
+                f"charge schedule stale token vehicle={partial_id(vid)} code={code}"
+            )
+            await self._async_handle_auth_failure(
+                AuthError(f"token stale (code={code})"), source="charge_schedule"
+            )
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN,
+                translation_key="auth_failed",
+            )
+        if code not in (OK_CODE, "0"):
+            _LOGGER.warning(
+                f"charge schedule failed vehicle={partial_id(vid)} "
+                f"code={code} msg={result.get('msg')}"
+            )
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="control_failed",
+                translation_placeholders={
+                    "error": f"code={code or 'none'} msg={result.get('msg')}"
+                },
+            )
+        self._store_charge_schedule(vid, settings)
+        probed: dict[str, Any] = {}
+        try:
+            probed = await self._probe_charge_settings(vid)
+        except AuthError as err:
+            await self._async_handle_auth_failure(err, source="charge_schedule")
+        except Exception:
+            _LOGGER.exception(
+                f"charge schedule read-back failed vehicle={partial_id(vid)}"
+            )
+        for key in SCHEDULE_STATE_KEYS:
+            if probed and probed.get(key) != settings.get(key):
+                _LOGGER.warning(
+                    f"charge schedule read-back mismatch vehicle={partial_id(vid)} "
+                    f"field={key} sent={settings.get(key)!r} stored={probed.get(key)!r}"
+                )
+                break
+        self._publish_data()
+        self._maybe_notify_spec_changes(vid)
+        return {
+            key: self._copy_charge_settings(vid).get(key) for key in SCHEDULE_STATE_KEYS
+        }
 
     async def async_stop(self) -> None:
         ws_count = sum(1 for rt in self._vehicles.values() if rt.ws_task)

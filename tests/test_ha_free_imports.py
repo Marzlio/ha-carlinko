@@ -11,6 +11,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _ENGINE = _REPO / "engine"
 _HA_FREE_MODULES = (
+    "carlinko.models.charge_schedule",
     "carlinko.models.entity_specs",
     "carlinko.models.entity_values",
     "carlinko.models.vehicle_state",
@@ -67,6 +68,7 @@ def test_platforms_use_common_entity_setup() -> None:
         "sensor",
         "binary_sensor",
         "number",
+        "time",
         "lock",
         "climate",
         "cover",
